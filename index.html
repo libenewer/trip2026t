@@ -377,6 +377,8 @@ function viewCheck() {
   let h = '<section class="card"><div class="chips">' + [1,2,3,4,5,6,7,8,9,10].map((x) => `<button type="button" class="chip${x === cls ? ' on' : ''}" data-cls="${x}" aria-pressed="${x === cls}">${x}반</button>`).join('') + '</div>';
   h += `<div class="info"><span>담임 <b>${esc(ci.teacher)}</b></span><span>${g.name} 조장 <b>${GROUP_ORG[g.name].head}</b></span><span>참가 <b>${ci.n}명</b> (남 ${ci.m} · 여 ${ci.f})</span><span>버스 <b>${cls}호차</b></span><span>기차 <b>${ci.car}호차</b></span></div>`;
   if (ci.with) h += `<p class="muted">${ci.with}</p>`;
+  const guard = refRows('안전요원').find((r) => r['구분'] === '주간' && parseInt(r['반'], 10) === cls);
+  if (guard) h += `<a class="tel" href="${tel(guard['연락처'])}" style="border:0;min-height:40px"><span>담당 안전요원 <strong>${esc(guard['성명'])}</strong>${guard['비고'] ? ` <span class="pill act">${esc(guard['비고'])}</span>` : ''}</span><b>${esc(guard['연락처'])}</b></a>`;
   h += '</section>' + daySeg();
   const st = classStatus(cls, S.day);
   h += `<p class="muted" style="padding:0 2px">${DAY_INFO[S.day]} · 완료 ${st.done}/${st.total}</p><section class="card" style="padding:4px 14px">`;
@@ -468,7 +470,13 @@ function viewStudents() {
 
   // 객실 배정 (시트 열: 층 · 호 · 학급 · 인원 · 이름1~이름4)
   const clsNum = (v) => parseInt(String(v).replace(/[^0-9]/g, ''), 10);
-  const allRooms = refRows('객실배정').filter((r) => String(r['호'] || '').trim());
+  // 시트 「객실배정」. 병합된 층 칸은 위 행의 층을 이어받음
+  let lastFloor = '';
+  const allRooms = refRows('객실배정').map((r) => {
+    const fl = String(r['층'] || '').trim();
+    if (fl) lastFloor = fl;
+    return { ...r, '층': fl || lastFloor };
+  }).filter((r) => String(r['호'] || '').trim());
   const rooms = allRooms.filter((r) => !f || clsNum(r['학급']) === f);
   h += `<details class="card"${f ? ' open' : ''}><summary>객실 배정 ${rooms.length ? `<span class="pill wait">${rooms.length}실</span>` : ''}</summary>`;
   if (!hasRef()) h += lockNote('객실 배정표');
@@ -481,7 +489,7 @@ function viewStudents() {
       const rs = rooms.filter((r) => String(r['층']).trim() === fl);
       h += `<h3 data-floor="${esc(fl)}" style="margin:6px 0 2px">${esc(fl)}${/층$/.test(fl) ? '' : '층'}</h3><div class="scroll"><table><thead><tr><th>호</th><th>학급</th><th>인원</th><th>명단</th></tr></thead><tbody>` +
         rs.map((r) => {
-          const names = ['이름1', '이름2', '이름3', '이름4'].map((k) => String(r[k] || '').trim()).filter(Boolean);
+          const names = ['이름1', '이름2', '이름3', '이름4'].map((k) => String(r[k] || '').trim()).filter((v) => v && !/^[xX×-]+$/.test(v));
           const q = [r['호'], r['학급'], ...names].join(' ').toLowerCase();
           const c = String(r['학급']).trim();
           return `<tr data-room="${esc(q)}" data-fl="${esc(fl)}"><td><strong>${esc(r['호'])}</strong></td><td>${esc(c)}${/^[0-9]+$/.test(c) ? '반' : ''}</td><td>${esc(r['인원'])}</td><td>${names.map(esc).join(', ') || '<span class="muted">—</span>'}</td></tr>`;
@@ -507,6 +515,19 @@ function viewInfo() {
   h += '<details class="card" open><summary>인솔교사 비상연락망</summary>';
   h += tc.length ? tc.map((r) => `<a class="tel" href="${tel(r['연락처'])}"><span>${esc(r['구분'])} <strong>${esc(r['성명'])}</strong>${r['비고'] ? `<small>${esc(r['비고'])}</small>` : ''}</span><b>${esc(r['연락처'])}</b></a>`).join('') : lockNote('교사 개인 연락처');
   h += '</details>';
+  // 안전요원 · 여행사
+  const sg = refRows('안전요원');
+  h += '<details class="card"><summary>안전요원 · 여행사 연락망</summary>';
+  if (!sg.length) h += lockNote('안전요원 연락처');
+  else {
+    const grp = [['총괄인솔', '여행사 총괄'], ['주간', '주간 안전요원 (버스·학급 담당)'], ['야간', '야간 안전요원 (23:00~06:00)']];
+    grp.forEach(([k, label]) => {
+      const rs = sg.filter((r) => r['구분'] === k);
+      if (!rs.length) return;
+      h += `<h3 style="margin:8px 0 2px">${label}</h3>` + rs.map((r) => `<a class="tel" href="${tel(r['연락처'])}"><span>${r['반'] ? `${esc(r['조'])} · ${esc(r['반'])}반 ` : ''}<strong>${esc(r['성명'])}</strong>${r['비고'] ? `<small>${esc(r['비고'])}</small>` : ''}</span><b>${esc(r['연락처'])}</b></a>`).join('');
+    });
+  }
+  h += '</details>';
   // 사안 대처
   h += `<details class="card" open><summary>사안 발생 시 대처 순서</summary><ol class="flow">
     <li>학생 응급 상황 발견 → 인솔교사에게 보고<small>최초 발견자</small></li>
@@ -525,10 +546,11 @@ function viewInfo() {
     Object.keys(CLASS_INFO).map((c) => { const ci = CLASS_INFO[c]; return `<tr><td><strong>${c}반</strong></td><td>${ci.teacher}</td><td>${ci.n}명<br><span class="muted">남${ci.m}·여${ci.f}</span></td><td>${c}호차</td><td>${ci.car}호차</td><td class="sub">${ci.with || '—'}</td></tr>`; }).join('') +
     `</tbody></table></div><p class="muted" style="margin-top:8px">참가 학생 ${TOTAL}명 · 인솔교원 14명 · 버스마다 안전요원 1명 · 버스 배정은 현지 상황에 따라 변경될 수 있음</p></details>`;
   // 지도 편성
+  const nightNames = refRows('안전요원').filter((r) => r['구분'] === '야간').map((r) => r['성명']).join(', ');
   h += `<details class="card"><summary>안전 지도 편성</summary>
     <ul class="plain"><li><strong>일과 중 (06:00~17:00)</strong>: 각반 담임 · 조별 지도교사</li><li>교감·학년부장·안전인권부장 수시 지도, 도움반 교사는 도움반 학생 관리</li><li><strong>17:00~19:00 (석식 포함)</strong>: 지도교사 전원</li></ul>
     <div class="scroll" style="margin-top:8px"><table><thead><tr><th>날짜</th><th>19:00~21:00</th><th>21:00~23:00</th><th>23:00~06:00</th></tr></thead><tbody>` +
-    NIGHT.map((n) => `<tr><td><strong>${n.day}</strong></td><td>${n.a}</td><td>${n.b}</td><td>안전지도요원</td></tr>`).join('') +
+    NIGHT.map((n) => `<tr><td><strong>${n.day}</strong></td><td>${n.a}</td><td>${n.b}</td><td>야간 안전요원${nightNames ? `<br><span class="muted">${esc(nightNames)}</span>` : ''}</td></tr>`).join('') +
     `</tbody></table></div><p class="muted" style="margin-top:8px">10/23(금) 17:00~19:00 수원역 복귀 및 귀가 지도 · 교감·학년부장·안전인권부장 층별 수시 지도</p>`;
   const rooms = refRows('교사숙소');
   h += '<h3 style="margin-top:10px">인솔교사 숙소</h3>' + (rooms.length ? '<div class="scroll"><table><thead><tr><th>층</th><th>호실</th><th>교사</th></tr></thead><tbody>' + rooms.map((r) => `<tr><td>${esc(r['층'])}층</td><td><strong>${esc(r['호실'])}</strong></td><td>${esc(r['교사'])}</td></tr>`).join('') + '</tbody></table></div>' : lockNote('교사 숙소 호실')) + '</details>';
