@@ -289,7 +289,8 @@ async function load(silent) {
     const j = await res.json();
     if (!j.ok) { S.error = '비밀번호가 맞지 않아요. 다시 입력해 주세요.'; S.code = ''; lset('t-code', null); }
     else { store = j.data; ref = j.ref || {}; S.error = ''; S.lastSync = new Date(); }
-  } catch (e) { S.error = '서버에 연결하지 못했어요. 잠시 후 다시 시도합니다.'; }
+  } catch (e) { S.error = '서버에 연결하지 못했어요. 인터넷 연결을 확인하고, 계속 이러면 Apps Script 웹 앱의 액세스 권한이 「모든 사용자」인지 확인해 주세요.'; }
+  if (!S.error && !(ref['요보호'] || []).length && !(ref['교사연락처'] || []).length) S.error = '구글 시트에서 학생·교사 명단을 받지 못했어요. Apps Script에서 setupSheets를 실행했는지, 새 버전으로 다시 배포했는지 확인해 주세요.';
   const a = document.activeElement;
   const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT');
   if (!silent || !typing) render();
@@ -465,12 +466,28 @@ function viewStudents() {
     alg.map((r) => `<tr><td><strong>${clsOfId(r['학번'])}반 ${esc(r['성명'])}</strong></td><td>${esc(r['음식'])}</td><td class="sub">${esc(r['증상'])}</td><td><a href="${tel(r['비상연락처'])}">${esc(r['비상연락처'])}</a></td></tr>`).join('') + '</tbody></table></div>';
   h += '</details>';
 
-  // 객실 배정
-  const rooms = refRows('객실배정').filter((r) => r['호실'] && (!f || +r['학급'] === f || String(r['학급']).replace('반', '') === String(f)));
-  h += `<details class="card"><summary>학생 객실 배정</summary>`;
+  // 객실 배정 (시트 열: 층 · 호 · 학급 · 인원 · 이름1~이름4)
+  const clsNum = (v) => parseInt(String(v).replace(/[^0-9]/g, ''), 10);
+  const allRooms = refRows('객실배정').filter((r) => String(r['호'] || '').trim());
+  const rooms = allRooms.filter((r) => !f || clsNum(r['학급']) === f);
+  h += `<details class="card"${f ? ' open' : ''}><summary>객실 배정 ${rooms.length ? `<span class="pill wait">${rooms.length}실</span>` : ''}</summary>`;
   if (!hasRef()) h += lockNote('객실 배정표');
-  else if (!rooms.length) h += '<p class="muted">구글 시트 「객실배정」 탭에 확정된 배정표(호실·학급·구분·명단)를 입력하면 여기에 표시돼요.</p>';
-  else h += '<div class="scroll"><table><thead><tr><th>호실</th><th>학급</th><th>구분</th><th>명단</th></tr></thead><tbody>' + rooms.map((r) => `<tr><td><strong>${esc(r['호실'])}</strong></td><td>${esc(r['학급'])}</td><td>${esc(r['구분'])}</td><td>${esc(r['명단'])}</td></tr>`).join('') + '</tbody></table></div>';
+  else if (!allRooms.length) h += '<p class="muted">구글 시트 「객실배정」 탭(층·호·학급·인원·이름1~4)에 입력하면 여기에 표시돼요.</p>';
+  else if (!rooms.length) h += '<p class="muted">이 반에 배정된 객실이 없어요.</p>';
+  else {
+    h += '<input class="field" type="search" data-roomq placeholder="학생 이름이나 호실로 찾기" aria-label="객실 검색" style="margin-bottom:8px">';
+    const floors = [...new Set(rooms.map((r) => String(r['층']).trim()))];
+    floors.forEach((fl) => {
+      const rs = rooms.filter((r) => String(r['층']).trim() === fl);
+      h += `<h3 data-floor="${esc(fl)}" style="margin:6px 0 2px">${esc(fl)}${/층$/.test(fl) ? '' : '층'}</h3><div class="scroll"><table><thead><tr><th>호</th><th>학급</th><th>인원</th><th>명단</th></tr></thead><tbody>` +
+        rs.map((r) => {
+          const names = ['이름1', '이름2', '이름3', '이름4'].map((k) => String(r[k] || '').trim()).filter(Boolean);
+          const q = [r['호'], r['학급'], ...names].join(' ').toLowerCase();
+          const c = String(r['학급']).trim();
+          return `<tr data-room="${esc(q)}" data-fl="${esc(fl)}"><td><strong>${esc(r['호'])}</strong></td><td>${esc(c)}${/^[0-9]+$/.test(c) ? '반' : ''}</td><td>${esc(r['인원'])}</td><td>${names.map(esc).join(', ') || '<span class="muted">—</span>'}</td></tr>`;
+        }).join('') + '</tbody></table></div>';
+    });
+  }
   h += '</details>';
 
   // 불참 학생
@@ -583,6 +600,18 @@ document.addEventListener('click', (ev) => {
   }
   else if (ds.act === 'refresh') load();
   else if (ds.act === 'logout') { S.code = ''; S.by = ''; ref = {}; lset('t-code', null); lset('t-name', null); render(); }
+});
+document.addEventListener('input', (ev) => {
+  const t = ev.target;
+  if (!t.matches || !t.matches('[data-roomq]')) return;
+  const q = t.value.trim().toLowerCase();
+  const box = t.closest('details');
+  box.querySelectorAll('tr[data-room]').forEach((tr) => { tr.style.display = !q || tr.dataset.room.includes(q) ? '' : 'none'; });
+  box.querySelectorAll('h3[data-floor]').forEach((hd) => {
+    const any = [...box.querySelectorAll('tr[data-room]')].some((tr) => tr.dataset.fl === hd.dataset.floor && tr.style.display !== 'none');
+    hd.style.display = any ? '' : 'none';
+    hd.nextElementSibling.style.display = any ? '' : 'none';
+  });
 });
 document.addEventListener('submit', (ev) => {
   ev.preventDefault();
